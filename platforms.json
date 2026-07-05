@@ -118,6 +118,16 @@
     "EXTRAVERSION": "+",
     "ARCH" : "x86_64",
     "CROSS_COMPILE" : "/usr/local/x86_64-pc-linux-gnu/bin/x86_64-pc-linux-gnu-"
+  },
+  "r1000nk": {
+    "toolchain": "https://global.synologydownload.com/download/ToolChain/toolchain/7.3-86009/AMD%20x86%20Linux%205.10.55%20%28r1000nk%29/r1000nk-gcc1220_glibc236_x86_64-GPL.txz",
+    "kernel": "https://global.synologydownload.com/download/ToolChain/Synology%20NAS%20GPL%20Source/7.3-86009/r1000nk/linux-5.10.x.txz",
+    "VERSION": "5",
+    "PATCHLEVEL": "10",
+    "SUBLEVEL": "55",
+    "EXTRAVERSION": "+",
+    "ARCH" : "x86_64",
+    "CROSS_COMPILE" : "/usr/local/x86_64-pc-linux-gnu/bin/x86_64-pc-linux-gnu-"
   }
 
 }
