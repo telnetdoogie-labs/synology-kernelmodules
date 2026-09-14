@@ -209,6 +209,10 @@ mkdir -p $FINAL_FOLDER
 cp net/ipv4/netfilter/iptable_raw.ko $FINAL_FOLDER/iptable_raw.ko
 cp net/ipv6/netfilter/ip6table_raw.ko $FINAL_FOLDER/ip6table_raw.ko
 cp fs/overlayfs/overlay.ko $FINAL_FOLDER/overlay.ko
+cp net/ipv6/netfilter/nf_nat_ipv6.ko $FINAL_FOLDER/nf_nat_ipv6.ko
+cp net/ipv6/netfilter/nf_nat_masquerade_ipv6.ko $FINAL_FOLDER/nf_nat_masquerade_ipv6.ko
+cp net/ipv6/netfilter/ip6table_nat.ko $FINAL_FOLDER/ip6table_nat.ko
+cp net/ipv6/netfilter/ip6t_MASQUERADE.ko $FINAL_FOLDER/ip6t_MASQUERADE.ko
 
 echo "Finished; Copied modules to $FINAL_FOLDER/"
 exit 0
