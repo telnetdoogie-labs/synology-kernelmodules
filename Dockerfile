@@ -31,7 +31,7 @@ RUN apt-get install -y \
     perl \
  && update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-10 100 \
  && update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-10 100 \
- && rm -rf /var/lib/apt/lists/*                    
+ && rm -rf /var/lib/apt/lists/*
 
 ENV HOSTCFLAGS="-Wno-error"
 
