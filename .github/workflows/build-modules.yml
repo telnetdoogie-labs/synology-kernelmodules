@@ -14,13 +14,17 @@ on:
         type: string
         default: ""
       include_legacy:
-        description: Also build 3.x-kernel platforms with Dockerfile_legacy (experimental, expected to fail)
+        description: Also build 3.x-kernel platforms with Dockerfile_legacy (experimental; no overlay.ko on 3.x)
         type: boolean
         default: false
       open_pr:
         description: Open a pull request that updates compiled_modules/ with the new builds
         type: boolean
         default: false
+  # Weekly check for new Synology sources. Only platforms whose toolchain or kernel
+  # source changed since compiled_modules/sources.json are rebuilt, and a PR is opened.
+  schedule:
+    - cron: "23 4 * * 1"
   push:
     branches: [main, master]
     tags: ["v*"]
@@ -61,7 +65,7 @@ jobs:
     permissions:
       contents: read
     outputs:
-      include: ${{ steps.select.outputs.include }}
+      include: ${{ steps.changed.outputs.include }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -86,6 +90,31 @@ jobs:
           INCLUDE_LEGACY: ${{ inputs.include_legacy || false }}
         run: bash .github/scripts/select-platforms.sh discovered_platforms.json "$REQUESTED" "$INCLUDE_LEGACY" >> "$GITHUB_OUTPUT"
 
+      # Scheduled runs skip platforms whose sources match what compiled_modules/ was built from.
+      - name: Skip unchanged platforms
+        id: changed
+        env:
+          INCLUDE: ${{ steps.select.outputs.include }}
+          ONLY_CHANGED: ${{ github.event_name == 'schedule' }}
+        run: |
+          if [ "$ONLY_CHANGED" != true ]; then
+            echo "include=$INCLUDE" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          built=$(cat compiled_modules/sources.json 2>/dev/null || echo '{}')
+          include=$(jq -c --argjson built "$built" --slurpfile found discovered_platforms.json \
+            'map(select(.platform as $p | $built[$p] != $found[0][$p]))' <<< "$INCLUDE")
+          {
+            echo "## Platforms with new sources"
+            echo
+            if [ "$include" = "[]" ]; then
+              echo "None. compiled_modules/ is up to date."
+            else
+              jq -r '.[] | "- \(.platform)"' <<< "$include"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "include=$include" >> "$GITHUB_OUTPUT"
+
       # Every build job uses this exact list, so all platforms build from the same sources.
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
@@ -96,6 +125,7 @@ jobs:
   build:
     name: ${{ matrix.platform }} (${{ matrix.kver }})
     needs: matrix
+    if: ${{ needs.matrix.outputs.include != '[]' }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:
@@ -150,8 +180,8 @@ jobs:
 
   collect:
     name: Collect modules
-    needs: build
-    if: ${{ !cancelled() }}
+    needs: [matrix, build]
+    if: ${{ !cancelled() && needs.matrix.outputs.include != '[]' }}
     runs-on: ubuntu-latest
     permissions: {}
     steps:
@@ -160,6 +190,20 @@ jobs:
           pattern: modules-*
           merge-multiple: true
           path: compiled_modules
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: discovered-platforms
+          path: ${{ runner.temp }}
+
+      # Record of the exact toolchain and kernel source URLs each built platform came from.
+      # Scheduled runs compare against this to decide what needs rebuilding.
+      - name: Record sources
+        run: |
+          mkdir -p compiled_modules
+          built=$(find compiled_modules -mindepth 2 -maxdepth 2 -type d -printf '%f\n' | jq -R . | jq -sc .)
+          jq --argjson built "$built" 'with_entries(select(.key as $k | $built | index($k)))' \
+            "$RUNNER_TEMP/discovered_platforms.json" > compiled_modules/sources.json
 
       - name: Summary
         run: |
@@ -196,11 +240,6 @@ jobs:
           name: compiled_modules
           path: compiled_modules
 
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
-        with:
-          name: discovered-platforms
-          path: ${{ runner.temp }}
-
       - name: Package one zip per platform
         run: |
           mkdir -p dist
@@ -211,7 +250,7 @@ jobs:
           done
           (cd compiled_modules && zip -r "$GITHUB_WORKSPACE/dist/all-platforms.zip" .)
           # Record of the exact toolchain and kernel source URLs these modules were built from.
-          cp "$RUNNER_TEMP/discovered_platforms.json" dist/sources.json
+          cp compiled_modules/sources.json dist/sources.json
           ls -l dist
 
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
@@ -222,8 +261,10 @@ jobs:
 
   pull-request:
     name: Open PR with modules
-    needs: [build, collect]
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.open_pr && needs.build.result == 'success' }}
+    needs: [matrix, build, collect]
+    if: >-
+      ${{ needs.build.result == 'success' && (github.event_name == 'schedule'
+      || (github.event_name == 'workflow_dispatch' && inputs.open_pr)) }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -236,7 +277,18 @@ jobs:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: compiled_modules
-          path: compiled_modules
+          path: ${{ runner.temp }}/compiled_modules
+
+      # A run may only rebuild some platforms, so keep the other platforms' entries in sources.json.
+      - name: Merge into compiled_modules/
+        run: |
+          new="$RUNNER_TEMP/compiled_modules"
+          old=compiled_modules/sources.json
+          mkdir -p compiled_modules
+          [ -f "$old" ] || echo '{}' > "$old"
+          jq -s '.[0] + .[1]' "$old" "$new/sources.json" > "$RUNNER_TEMP/sources.json"
+          cp -r "$new"/. compiled_modules/
+          mv "$RUNNER_TEMP/sources.json" "$old"
 
       - uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1
         with:
@@ -248,7 +300,10 @@ jobs:
           body: |
             Modules rebuilt by the [Build Kernel Modules workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}).
 
-            Platforms requested: `${{ inputs.platforms }}`
+            Platforms built: `${{ join(fromJSON(needs.matrix.outputs.include).*.platform, ', ') }}`
             DSM sources: `${{ inputs.dsm || 'newest' }}`
+            ${{ github.event_name == 'schedule' && 'Opened by the weekly check because Synology published new sources for these platforms.' || '' }}
+
+            `compiled_modules/sources.json` records the toolchain and kernel source each platform was built from.
 
             These have only been compiled, not tested on hardware.

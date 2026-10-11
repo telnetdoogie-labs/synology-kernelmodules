@@ -3,3 +3,4 @@
 build_*/
 .idea*/*
 discovered_platforms.json
+__pycache__/

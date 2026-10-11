@@ -7,7 +7,13 @@ set -euo pipefail
 
 dir=$1
 kver=$2
-modules="iptable_raw.ko ip6table_raw.ko overlay.ko"
+modules="iptable_raw.ko ip6table_raw.ko"
+# overlayfs only exists from Linux 3.18 on, so 3.10 platforms can't have overlay.ko.
+if [ "$(printf '%s\n' 3.18 "${kver%%[!0-9.]*}" | sort -V | head -n1)" = 3.18 ]; then
+  modules="$modules overlay.ko"
+else
+  echo "Not expecting overlay.ko: kernel $kver predates overlayfs (3.18)"
+fi
 failed=0
 
 for mod in $modules; do

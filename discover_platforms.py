@@ -102,12 +102,12 @@ def discover(dsm=None):
     kernels = newest_per_platform(GPL_INDEX, KERNEL_RE, dsm)
 
     platforms = {}
+    unknown = []
     for name in sorted(set(toolchains) & set(kernels)):
         tc_rel, (tc_url, _) = toolchains[name]
         kn_rel, (kn_url, _, ver, patch) = kernels[name]
         if (ver, patch) not in DSM7_KERNELS:
-            print("warning: skipping {}: unknown kernel series linux-{}.{}.x".format(name, ver, patch),
-                  file=sys.stderr)
+            unknown.append("{} (linux-{}.{}.x, {})".format(name, ver, patch, kn_rel))
             continue
         sub, extra = DSM7_KERNELS[(ver, patch)]
         platforms[name] = {
@@ -124,6 +124,11 @@ def discover(dsm=None):
         }
     for name in sorted(set(toolchains) - set(kernels)):
         print("note: skipping {}: toolchain published but no kernel source".format(name), file=sys.stderr)
+    # Fail rather than quietly drop a platform: a new kernel series needs its full
+    # version added to DSM7_KERNELS before its modules can get the right vermagic.
+    if unknown:
+        sys.exit("error: unknown kernel series, add it to DSM7_KERNELS in discover_platforms.py: "
+                 + ", ".join(unknown))
     return platforms
 
 
