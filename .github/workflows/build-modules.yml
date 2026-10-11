@@ -260,7 +260,25 @@ jobs:
             "$GITHUB_REF_NAME" "$GITHUB_SHA" "$RUNNER_TEMP/release"
           cat "$RUNNER_TEMP/release/notes.md" >> "$GITHUB_STEP_SUMMARY"
 
+      # A release published by hand (which is what created this tag) keeps its own
+      # title and notes; the build only attaches the files to it.
+      - name: Check for a hand-written release
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$GITHUB_REF_NAME" --silent 2>/dev/null; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Attach files to the existing release
+        if: ${{ steps.existing.outputs.found }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" "$RUNNER_TEMP"/release/dist/* --clobber --repo "$GITHUB_REPOSITORY"
+
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
+        if: ${{ !steps.existing.outputs.found }}
         with:
           files: ${{ runner.temp }}/release/dist/*
           body_path: ${{ runner.temp }}/release/notes.md
