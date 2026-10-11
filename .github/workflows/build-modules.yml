@@ -14,15 +14,20 @@ on:
         type: string
         default: ""
       include_legacy:
-        description: Also build 3.x-kernel platforms with Dockerfile_legacy (experimental; no overlay.ko on 3.x)
+        description: Also build 3.x-kernel platforms with Dockerfile_legacy (no overlay.ko on 3.x)
         type: boolean
-        default: false
-      open_pr:
-        description: Open a pull request that updates compiled_modules/ with the new builds
-        type: boolean
-        default: false
+        default: true
+      publish:
+        description: What to do with the new builds
+        type: choice
+        options:
+          - nothing
+          - open a pull request
+          - merge and release
+        default: nothing
   # Weekly check for new Synology sources. Only platforms whose toolchain or kernel
-  # source changed since compiled_modules/sources.json are rebuilt, and a PR is opened.
+  # source changed since compiled_modules/sources.json are rebuilt; the new modules
+  # are merged into main and published as a release, with no manual steps.
   schedule:
     - cron: "23 4 * * 1"
   push:
@@ -87,7 +92,8 @@ jobs:
         id: select
         env:
           REQUESTED: ${{ inputs.platforms || 'all' }}
-          INCLUDE_LEGACY: ${{ inputs.include_legacy || false }}
+          # Scheduled runs and releases build legacy platforms too; branch pushes and PRs keep to the main image.
+          INCLUDE_LEGACY: ${{ github.event_name == 'schedule' || startsWith(github.ref, 'refs/tags/v') || inputs.include_legacy || false }}
         run: bash .github/scripts/select-platforms.sh discovered_platforms.json "$REQUESTED" "$INCLUDE_LEGACY" >> "$GITHUB_OUTPUT"
 
       # Scheduled runs skip platforms whose sources match what compiled_modules/ was built from.
@@ -227,6 +233,7 @@ jobs:
           path: compiled_modules/
           if-no-files-found: error
 
+  # A pushed tag (e.g. v1.2.0) releases a fresh build of every platform.
   release:
     name: Publish release
     needs: [build, collect]
@@ -237,6 +244,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          fetch-depth: 0
           persist-credentials: false
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
@@ -244,58 +252,43 @@ jobs:
           name: compiled_modules
           path: ${{ runner.temp }}/compiled_modules
 
-      # Zips are named <platform>.zip: GitHub renames asset names containing "+",
-      # which would break the links in the release notes. The notes give each kernel version.
-      - name: Package one zip per platform
-        run: |
-          modules="$RUNNER_TEMP/compiled_modules"
-          mkdir -p dist
-          for dir in "$modules"/*/*/; do
-            platform=$(basename "$dir")
-            (cd "$dir" && zip -j "$GITHUB_WORKSPACE/dist/${platform}.zip" ./*.ko)
-          done
-          (cd "$modules" && zip -r "$GITHUB_WORKSPACE/dist/all-platforms.zip" .)
-          # Record of the exact toolchain and kernel source URLs these modules were built from.
-          cp "$modules/sources.json" dist/sources.json
-          ls -l dist
-
-      # GitHub's generated changelog (filtered by .github/release.yml) goes under a
-      # table of platforms, download links and install steps.
-      - name: Write release notes
+      - name: Package and write release notes
         env:
           GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          TAG: ${{ github.ref_name }}
         run: |
-          gh api "repos/$REPO/releases/generate-notes" -f tag_name="$TAG" --jq .body > "$RUNNER_TEMP/changelog.md"
-          python3 .github/scripts/release_notes.py \
-            --modules "$RUNNER_TEMP/compiled_modules" \
-            --sources "$RUNNER_TEMP/compiled_modules/sources.json" \
-            --repo "$REPO" --tag "$TAG" \
-            --changelog "$RUNNER_TEMP/changelog.md" > "$RUNNER_TEMP/notes.md"
-          cat "$RUNNER_TEMP/notes.md" >> "$GITHUB_STEP_SUMMARY"
+          bash .github/scripts/prepare-release.sh "$RUNNER_TEMP/compiled_modules" \
+            "$GITHUB_REF_NAME" "$GITHUB_SHA" "$RUNNER_TEMP/release"
+          cat "$RUNNER_TEMP/release/notes.md" >> "$GITHUB_STEP_SUMMARY"
 
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
         with:
-          files: dist/*
-          body_path: ${{ runner.temp }}/notes.md
+          files: ${{ runner.temp }}/release/dist/*
+          body_path: ${{ runner.temp }}/release/notes.md
           fail_on_unmatched_files: true
 
-  pull-request:
-    name: Open PR with modules
+  # Scheduled runs (and manual runs that ask for it): put the new modules in a PR,
+  # merge it, and release everything in compiled_modules/ on main.
+  # This all happens in one job because PRs and tags made with the workflow's token
+  # don't trigger other workflows.
+  publish:
+    name: Merge and release
     needs: [matrix, build, collect]
     if: >-
-      ${{ needs.build.result == 'success' && (github.event_name == 'schedule'
-      || (github.event_name == 'workflow_dispatch' && inputs.open_pr)) }}
+      ${{ !cancelled() && needs.collect.result == 'success' && (github.event_name == 'schedule'
+      || (github.event_name == 'workflow_dispatch' && inputs.publish != 'nothing')) }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
+    env:
+      MERGE: ${{ github.event_name == 'schedule' || inputs.publish == 'merge and release' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
 
+      # Platforms that failed to build are left out here and retried next week;
+      # the run still shows them as failed.
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: compiled_modules
@@ -308,6 +301,10 @@ jobs:
           DSM_VERSION: ${{ inputs.dsm }}
         run: |
           new="$RUNNER_TEMP/compiled_modules"
+          if [ "$(jq length "$new/sources.json")" = 0 ]; then
+            echo "::error::No platform built successfully, nothing to publish"
+            exit 1
+          fi
           # Compare with what main was built from, when there's a record of it.
           previous=()
           [ -f compiled_modules/sources.json ] && previous=(--previous compiled_modules/sources.json)
@@ -324,6 +321,10 @@ jobs:
             echo
             echo "Each module's \`vermagic\` was checked against the platform's kernel. They have only been compiled, not tested on hardware."
             echo "\`compiled_modules/sources.json\` records the exact toolchain and kernel source each platform was built from."
+            if [ "$MERGE" = true ]; then
+              echo
+              echo "This PR is merged automatically and a release is published from it."
+            fi
           } > "$RUNNER_TEMP/pr-body.md"
 
       # A run may only rebuild some platforms, so keep the other platforms' entries in sources.json.
@@ -337,7 +338,9 @@ jobs:
           cp -r "$new"/. compiled_modules/
           mv "$RUNNER_TEMP/sources.json" "$old"
 
-      - uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1
+      - name: Open pull request
+        id: cpr
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1
         with:
           add-paths: compiled_modules/**
           branch: ci/compiled-modules
@@ -345,3 +348,55 @@ jobs:
           commit-message: "chore: update compiled modules"
           title: "chore: update compiled modules"
           body-path: ${{ runner.temp }}/pr-body.md
+
+      # Retries because GitHub may still be working out whether a brand new PR can be merged.
+      - name: Merge pull request
+        id: merge
+        if: ${{ env.MERGE == 'true' && steps.cpr.outputs.pull-request-number != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ steps.cpr.outputs.pull-request-number }}
+        run: |
+          for attempt in 1 2 3 4 5 6; do
+            if gh pr merge "$PR" --repo "$GITHUB_REPOSITORY" --squash --delete-branch; then
+              break
+            fi
+            if [ "$attempt" = 6 ]; then
+              echo "::error::Could not merge PR #$PR. If main is protected, let GitHub Actions bypass the rules or merge it by hand."
+              exit 1
+            fi
+            sleep 20
+          done
+          sha=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json mergeCommit --jq .mergeCommit.oid)
+          echo "Merged PR #$PR as $sha"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Check out the merge
+        if: ${{ steps.merge.outputs.sha }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ steps.merge.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Releases every platform in compiled_modules/ on main, not just the ones rebuilt this run.
+      - name: Package and write release notes
+        id: prepare
+        if: ${{ steps.merge.outputs.sha }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.merge.outputs.sha }}
+        run: |
+          bash .github/scripts/prepare-release.sh compiled_modules auto "$SHA" "$RUNNER_TEMP/release"
+          echo "tag=$(cat "$RUNNER_TEMP/release/tag")" >> "$GITHUB_OUTPUT"
+          cat "$RUNNER_TEMP/release/notes.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
+        if: ${{ steps.prepare.outputs.tag }}
+        with:
+          tag_name: ${{ steps.prepare.outputs.tag }}
+          name: ${{ steps.prepare.outputs.tag }}
+          target_commitish: ${{ steps.merge.outputs.sha }}
+          files: ${{ runner.temp }}/release/dist/*
+          body_path: ${{ runner.temp }}/release/notes.md
+          fail_on_unmatched_files: true

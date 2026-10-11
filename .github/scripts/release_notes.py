@@ -141,7 +141,11 @@ def main():
     if args.previous:
         previous = load(args.previous) if os.path.exists(args.previous) else {}
 
-    legacy = sorted(p for p, (kver, mods) in built.items() if "overlay" not in mods)
+    def before_overlayfs(kver):
+        nums = [int(n) for n in re.findall(r"\d+", kver)[:2]]
+        return nums < [3, 18]
+
+    legacy = sorted(p for p, (kver, mods) in built.items() if before_overlayfs(kver))
     out = []
 
     if args.tag:

@@ -32,16 +32,22 @@ The kernel version each platform runs (e.g. `4.4.302+`) comes from a small table
 
 The `Build Kernel Modules` workflow (`.github/workflows/build-modules.yml`) runs the same Docker build on GitHub's runners, one parallel job per platform, so you don't need a Linux box at all.
 
-- **Run it manually:** Actions → _Build Kernel Modules_ → _Run workflow_. Enter `all` or a list of platforms such as `apollolake, geminilake`, and optionally a DSM version such as `7.2`.
-  - Tick _Open a pull request…_ to have the results committed to `compiled_modules/` in a PR.
-  - Tick _Also build 3.x-kernel platforms_ to try the experimental legacy image as well.
-- **Automatically:** it builds every platform whenever the build files change on a PR or on `main`.
-- **Weekly:** every Monday it checks Synology's archive. Any platform whose toolchain or kernel source differs from what `compiled_modules/` was built from (recorded in `compiled_modules/sources.json`) is rebuilt, and a PR with the new modules is opened. New platforms are picked up the same way. If nothing changed, nothing is built.
-- **Releases:** pushing a tag like `v1.2.0` builds everything and attaches one zip per platform (`<platform>.zip`) to a GitHub Release, plus `sources.json` listing the exact toolchain and kernel URLs used. The release notes are written by `.github/scripts/release_notes.py`: a table of every platform with its kernel version, modules, DSM source release and download link, install steps, then GitHub's changelog grouped by PR title prefix (`feat:`, `fix:`, `ci:`, `docs:`) with bots left out.
+- **Weekly, with no manual steps:** every Monday it checks Synology's archive and rebuilds any platform whose toolchain or kernel source differs from what `compiled_modules/` was built from (recorded in `compiled_modules/sources.json`), including platforms Synology has newly published. It then opens a PR with the new modules, merges it, and publishes a release of every platform. If nothing changed, nothing is built or released.
+  - Versions are picked automatically: a release that adds a platform bumps the minor version (`v1.1.0` → `v1.2.0`), anything else bumps the patch version (`v1.1.0` → `v1.1.1`).
+  - A platform that fails to build is left out and retried the next week. The rest still ship, and the run shows the failure.
+- **Run it manually:** Actions → _Build Kernel Modules_ → _Run workflow_. Enter `all` or a list of platforms such as `apollolake, geminilake`, and optionally a DSM version such as `7.2`. Under _What to do with the new builds_, choose _open a pull request_ to review the results first, or _merge and release_ to do what the weekly run does.
+- **On code changes:** it builds every platform whenever the build files change on a PR or on `main`, as a test. Nothing is published. To ship modules built by changed build scripts, run it manually with _merge and release_, or push a tag.
+- **Tags:** pushing a tag like `v2.0.0` builds every platform from scratch and releases it under that tag.
+
+Releases attach one zip per platform (`<platform>.zip`), `all-platforms.zip`, and `sources.json` listing the exact toolchain and kernel URLs used. The release notes are written by `.github/scripts/release_notes.py`: a table of every platform with its kernel version, modules, DSM source release, what changed since the previous release, and a download link; install steps; then GitHub's changelog grouped by PR title prefix (`feat:`, `fix:`, `ci:`, `docs:`) with bots left out.
 
 Each run lists the platforms it found in the run summary, checks that the expected `.ko` files were produced, and checks that their `vermagic` matches the platform's kernel version. Download the results from the run's **Artifacts** section: there is one `modules-<platform>` artifact per platform, plus a combined `compiled_modules`.
 
-For forks: the PR option and the weekly PR require _Settings → Actions → General → Allow GitHub Actions to create and approve pull requests_. GitHub also pauses scheduled workflows after 60 days without repository activity; re-enable it from the Actions tab if that happens.
+Repository settings this needs:
+
+- _Settings → Actions → General → Workflow permissions_: allow GitHub Actions to create and approve pull requests.
+- If `main` is protected by a branch rule or ruleset that requires reviews or status checks, the workflow can't merge its own PR. Add GitHub Actions to the ruleset's bypass list, or the weekly run will stop at an open PR.
+- GitHub pauses scheduled workflows after 60 days without repository activity. Re-enable it from the Actions tab if that happens.
 
 ## Experimental - Legacy builds
 
