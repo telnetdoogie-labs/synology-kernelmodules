@@ -235,28 +235,50 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: compiled_modules
-          path: compiled_modules
+          path: ${{ runner.temp }}/compiled_modules
 
+      # Zips are named <platform>.zip: GitHub renames asset names containing "+",
+      # which would break the links in the release notes. The notes give each kernel version.
       - name: Package one zip per platform
         run: |
+          modules="$RUNNER_TEMP/compiled_modules"
           mkdir -p dist
-          for dir in compiled_modules/*/*/; do
-            kver=$(basename "$(dirname "$dir")")
+          for dir in "$modules"/*/*/; do
             platform=$(basename "$dir")
-            (cd "$dir" && zip -j "$GITHUB_WORKSPACE/dist/${platform}_${kver}.zip" ./*.ko)
+            (cd "$dir" && zip -j "$GITHUB_WORKSPACE/dist/${platform}.zip" ./*.ko)
           done
-          (cd compiled_modules && zip -r "$GITHUB_WORKSPACE/dist/all-platforms.zip" .)
+          (cd "$modules" && zip -r "$GITHUB_WORKSPACE/dist/all-platforms.zip" .)
           # Record of the exact toolchain and kernel source URLs these modules were built from.
-          cp compiled_modules/sources.json dist/sources.json
+          cp "$modules/sources.json" dist/sources.json
           ls -l dist
+
+      # GitHub's generated changelog (filtered by .github/release.yml) goes under a
+      # table of platforms, download links and install steps.
+      - name: Write release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh api "repos/$REPO/releases/generate-notes" -f tag_name="$TAG" --jq .body > "$RUNNER_TEMP/changelog.md"
+          python3 .github/scripts/release_notes.py \
+            --modules "$RUNNER_TEMP/compiled_modules" \
+            --sources "$RUNNER_TEMP/compiled_modules/sources.json" \
+            --repo "$REPO" --tag "$TAG" \
+            --changelog "$RUNNER_TEMP/changelog.md" > "$RUNNER_TEMP/notes.md"
+          cat "$RUNNER_TEMP/notes.md" >> "$GITHUB_STEP_SUMMARY"
 
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
         with:
           files: dist/*
-          generate_release_notes: true
+          body_path: ${{ runner.temp }}/notes.md
           fail_on_unmatched_files: true
 
   pull-request:
@@ -279,6 +301,31 @@ jobs:
           name: compiled_modules
           path: ${{ runner.temp }}/compiled_modules
 
+      - name: Write PR description
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SCHEDULED: ${{ github.event_name == 'schedule' }}
+          DSM_VERSION: ${{ inputs.dsm }}
+        run: |
+          new="$RUNNER_TEMP/compiled_modules"
+          # Compare with what main was built from, when there's a record of it.
+          previous=()
+          [ -f compiled_modules/sources.json ] && previous=(--previous compiled_modules/sources.json)
+          {
+            if [ "$SCHEDULED" = true ]; then
+              echo "The weekly check found new Synology sources, so these platforms were rebuilt by [this workflow run]($RUN_URL)."
+            else
+              src="the newest"
+              [ -n "$DSM_VERSION" ] && src="DSM $DSM_VERSION"
+              echo "Modules rebuilt by [this workflow run]($RUN_URL) from $src sources."
+            fi
+            echo
+            python3 .github/scripts/release_notes.py --modules "$new" --sources "$new/sources.json" "${previous[@]}"
+            echo
+            echo "Each module's \`vermagic\` was checked against the platform's kernel. They have only been compiled, not tested on hardware."
+            echo "\`compiled_modules/sources.json\` records the exact toolchain and kernel source each platform was built from."
+          } > "$RUNNER_TEMP/pr-body.md"
+
       # A run may only rebuild some platforms, so keep the other platforms' entries in sources.json.
       - name: Merge into compiled_modules/
         run: |
@@ -297,13 +344,4 @@ jobs:
           delete-branch: true
           commit-message: "chore: update compiled modules"
           title: "chore: update compiled modules"
-          body: |
-            Modules rebuilt by the [Build Kernel Modules workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}).
-
-            Platforms built: `${{ join(fromJSON(needs.matrix.outputs.include).*.platform, ', ') }}`
-            DSM sources: `${{ inputs.dsm || 'newest' }}`
-            ${{ github.event_name == 'schedule' && 'Opened by the weekly check because Synology published new sources for these platforms.' || '' }}
-
-            `compiled_modules/sources.json` records the toolchain and kernel source each platform was built from.
-
-            These have only been compiled, not tested on hardware.
+          body-path: ${{ runner.temp }}/pr-body.md

@@ -37,7 +37,7 @@ The `Build Kernel Modules` workflow (`.github/workflows/build-modules.yml`) runs
   - Tick _Also build 3.x-kernel platforms_ to try the experimental legacy image as well.
 - **Automatically:** it builds every platform whenever the build files change on a PR or on `main`.
 - **Weekly:** every Monday it checks Synology's archive. Any platform whose toolchain or kernel source differs from what `compiled_modules/` was built from (recorded in `compiled_modules/sources.json`) is rebuilt, and a PR with the new modules is opened. New platforms are picked up the same way. If nothing changed, nothing is built.
-- **Releases:** pushing a tag like `v1.2.0` builds everything and attaches one zip per platform to a GitHub Release, plus `sources.json` listing the exact toolchain and kernel URLs used.
+- **Releases:** pushing a tag like `v1.2.0` builds everything and attaches one zip per platform (`<platform>.zip`) to a GitHub Release, plus `sources.json` listing the exact toolchain and kernel URLs used. The release notes are written by `.github/scripts/release_notes.py`: a table of every platform with its kernel version, modules, DSM source release and download link, install steps, then GitHub's changelog grouped by PR title prefix (`feat:`, `fix:`, `ci:`, `docs:`) with bots left out.
 
 Each run lists the platforms it found in the run summary, checks that the expected `.ko` files were produced, and checks that their `vermagic` matches the platform's kernel version. Download the results from the run's **Artifacts** section: there is one `modules-<platform>` artifact per platform, plus a combined `compiled_modules`.
 
