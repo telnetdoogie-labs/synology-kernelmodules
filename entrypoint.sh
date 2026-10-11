@@ -74,8 +74,21 @@ echo "Setup toolkit..."
 echo
 git clone https://github.com/SynologyOpenSource/pkgscripts-ng
 cd pkgscripts-ng
-git checkout DSM7.3
-./EnvDeploy -v 7.3 -p $PLATFORM
+
+# Use the build environment for the DSM release the sources came from (e.g. 7.4-90080 -> DSM7.4).
+# Synology sometimes publishes sources before the matching pkgscripts-ng branch,
+# so fall back to the newest DSM 7 branch when there isn't one yet.
+# A mounted platforms.json may have no "release" field, so read it from the kernel URL then.
+RELEASE=${SYNO_release:-$(echo "${SYNO_kernel:-}" | sed -n 's#.*/\([0-9][0-9.]*-[0-9][0-9]*\)/[^/]*/linux-[^/]*$#\1#p')}
+DSM_ENV=$(echo "$RELEASE" | cut -d- -f1 | cut -d. -f1,2)
+if [ -z "$DSM_ENV" ] || ! git rev-parse --verify -q "origin/DSM$DSM_ENV" > /dev/null; then
+  NEWEST=$(git branch -r | sed -n 's#^ *origin/DSM\(7\.[0-9][0-9]*\)$#\1#p' | sort -t. -k2,2n | tail -n 1)
+  echo "No pkgscripts-ng branch for DSM ${DSM_ENV:-(unknown)}, using DSM$NEWEST instead"
+  DSM_ENV=$NEWEST
+fi
+echo "Using pkgscripts-ng DSM$DSM_ENV"
+git checkout "DSM$DSM_ENV"
+./EnvDeploy -v "$DSM_ENV" -p "$PLATFORM"
 cd ..
 
 #------------------------------------------------------
