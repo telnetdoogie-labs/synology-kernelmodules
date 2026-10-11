@@ -228,7 +228,12 @@ make modules_prepare
 # compile the modules needed.
 make -j$(nproc) M=net/ipv4/netfilter modules
 make -j$(nproc) M=net/ipv6/netfilter modules
-make -j$(nproc) M=fs/overlayfs modules
+# overlayfs joined Linux in 3.18; Synology's 3.10 kernels don't have it (they ship aufs instead).
+if [ -d fs/overlayfs ]; then
+  make -j$(nproc) M=fs/overlayfs modules
+else
+  echo "Skipping overlay.ko: this kernel has no fs/overlayfs"
+fi
 
 #------------------------------------------------------
 
@@ -236,7 +241,9 @@ FINAL_FOLDER="/compiled_modules/$SYNO_VERSION.$SYNO_PATCHLEVEL.$SYNO_SUBLEVEL$SY
 mkdir -p $FINAL_FOLDER
 cp net/ipv4/netfilter/iptable_raw.ko $FINAL_FOLDER/iptable_raw.ko
 cp net/ipv6/netfilter/ip6table_raw.ko $FINAL_FOLDER/ip6table_raw.ko
-cp fs/overlayfs/overlay.ko $FINAL_FOLDER/overlay.ko
+if [ -d fs/overlayfs ]; then
+  cp fs/overlayfs/overlay.ko $FINAL_FOLDER/overlay.ko
+fi
 
 echo "Finished; Copied modules to $FINAL_FOLDER/"
 exit 0

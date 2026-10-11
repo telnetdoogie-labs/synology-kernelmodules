@@ -26,7 +26,7 @@ There's no platform list to maintain. Each build reads [Synology's toolchain arc
 - **Match an older DSM:** add `-e DSM_VERSION=7.2` to build from DSM 7.2 sources instead of the newest.
 - **Pin exact sources:** mount your own file with `-v ./my_platforms.json:/synology-toolkit/platforms.json:ro`. Use the format `discover_platforms.py` prints.
 
-The kernel version each platform runs (e.g. `4.4.302+`) comes from a small table in `discover_platforms.py` covering DSM 7's three kernel series. That's the only thing to update, and only if Synology moves to a new kernel series.
+The kernel version each platform runs (e.g. `4.4.302+`) comes from a small table in `discover_platforms.py` covering DSM 7's three kernel series. That's the only thing to update, and only if Synology moves to a new kernel series. Discovery fails with an error naming the platform if that happens, so it can't be missed.
 
 ## Using GitHub Actions
 
@@ -36,16 +36,18 @@ The `Build Kernel Modules` workflow (`.github/workflows/build-modules.yml`) runs
   - Tick _Open a pull request…_ to have the results committed to `compiled_modules/` in a PR.
   - Tick _Also build 3.x-kernel platforms_ to try the experimental legacy image as well.
 - **Automatically:** it builds every platform whenever the build files change on a PR or on `main`.
+- **Weekly:** every Monday it checks Synology's archive. Any platform whose toolchain or kernel source differs from what `compiled_modules/` was built from (recorded in `compiled_modules/sources.json`) is rebuilt, and a PR with the new modules is opened. New platforms are picked up the same way. If nothing changed, nothing is built.
 - **Releases:** pushing a tag like `v1.2.0` builds everything and attaches one zip per platform to a GitHub Release, plus `sources.json` listing the exact toolchain and kernel URLs used.
 
-Each run lists the platforms it found in the run summary, checks that all three `.ko` files were produced, and checks that their `vermagic` matches the platform's kernel version. Download the results from the run's **Artifacts** section: there is one `modules-<platform>` artifact per platform, plus a combined `compiled_modules`.
+Each run lists the platforms it found in the run summary, checks that the expected `.ko` files were produced, and checks that their `vermagic` matches the platform's kernel version. Download the results from the run's **Artifacts** section: there is one `modules-<platform>` artifact per platform, plus a combined `compiled_modules`.
 
-For forks: the PR option requires _Settings → Actions → General → Allow GitHub Actions to create and approve pull requests_.
+For forks: the PR option and the weekly PR require _Settings → Actions → General → Allow GitHub Actions to create and approve pull requests_. GitHub also pauses scheduled workflows after 60 days without repository activity; re-enable it from the Actions tab if that happens.
 
 ## Experimental - Legacy builds
 
-I've been attempting to build for older kernels, as yet unsuccessfully, but I leave a trail here lest someone can continue and make it work
-I have made a 'legacy' Dockerfile for these older builds, where older compilers and OSes are required nmaybe.
+Older platforms (avoton, braswell, bromolow, grantley, cedarview) run Linux 3.10, which needs the 'legacy' Dockerfile with an older compiler. These builds haven't been tested on hardware yet.
+
+Only `iptable_raw.ko` and `ip6table_raw.ko` are built for 3.10. overlayfs arrived in Linux 3.18, and Synology's 3.10 kernel source doesn't include it (it ships aufs instead), so there is no `overlay.ko` for these platforms.
 
 ```
 docker build -t compile_modules_legacy ./Dockerfile_legacy
