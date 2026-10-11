@@ -157,7 +157,7 @@ def main():
             "## Which file do I need?",
             "",
             "Run `uname -a` on your NAS. The end of the output names your platform "
-            "(for example `synology_geminilake_920+` means **geminilake**), and the kernel version "
+            "(for example, `synology_geminilake_920+` means **geminilake**), and the kernel version "
             "must match the Kernel column exactly.",
             "",
         ]
@@ -190,8 +190,8 @@ def main():
             "lsmod | grep -E 'raw|overlay'",
             "```",
             "",
-            "To load them on every boot, add the `insmod` lines to a triggered task in Task "
-            "Scheduler that runs as `root` at boot-up. See the "
+            "To load them on every boot, add the `insmod` lines to a Task Scheduler task that "
+            "runs as `root` at boot. See the "
             "[README](https://github.com/{}#readme) for details.".format(args.repo or ""),
             "",
         ]
