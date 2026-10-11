@@ -1,5 +1,23 @@
 #!/bin/sh
 
+# Check for config modification file
+if [ ! -f "config_modification.json" ]; then
+  echo "Error: config_modification.json not found!"
+  exit 1
+fi
+
+# Platform list: use platforms.json if one was mounted into the container,
+# otherwise build it from Synology's archive (archive.synology.com).
+# Set DSM_VERSION (e.g. 7.2) to use sources for that DSM release instead of the newest.
+if [ ! -f "platforms.json" ]; then
+  echo "Discovering platforms from archive.synology.com${DSM_VERSION:+ for DSM $DSM_VERSION}..."
+  if ! python3 discover_platforms.py ${DSM_VERSION:+--dsm "$DSM_VERSION"} > platforms.json; then
+    rm -f platforms.json
+    echo "Error: could not get the platform list from archive.synology.com"
+    exit 1
+  fi
+fi
+
 # Check for platform ENV variable
 if [ -z "$PLATFORM" ]; then
   echo "Error: PLATFORM is not set!"
@@ -9,19 +27,16 @@ if [ -z "$PLATFORM" ]; then
   exit 1
 fi
 
-# Check for config modification file
-if [ ! -f "config_modification.json" ]; then
-  echo "Error: config_modification.json not found!"
-  exit 1
-fi
-
-# Check for platforms file
-if [ ! -f "platforms.json" ]; then
-  echo "Error: platforms.json not found!"
+if ! jq -e --arg PLATFORM "$PLATFORM" 'has($PLATFORM)' platforms.json > /dev/null; then
+  echo "Error: unknown platform '$PLATFORM'${DSM_VERSION:+ for DSM $DSM_VERSION}"
+  echo "Use one of the following platforms:"
+  echo
+  jq -r 'keys[]' platforms.json
   exit 1
 fi
 
 echo "PLATFORM is set to: $PLATFORM"
+jq --arg PLATFORM "$PLATFORM" '.[$PLATFORM] | {kernel, toolchain}' platforms.json
 
 # read all the values from the platforms file.
 export $(jq -r --arg PLATFORM "$PLATFORM" '.[$PLATFORM] | to_entries | map("SYNO_\(.key)=\(.value)") | .[]' platforms.json)

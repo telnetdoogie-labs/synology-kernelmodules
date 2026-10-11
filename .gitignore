@@ -2,3 +2,4 @@
 *_linux*/
 build_*/
 .idea*/*
+discovered_platforms.json

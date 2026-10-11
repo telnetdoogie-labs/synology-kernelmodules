@@ -12,5 +12,5 @@ if [ -n "$MATCHING_LINES" ]; then
     sed -i '/DCACHE_OP_HASH[[:space:]]*|/d' "$SUPER_C"
     echo "Patch applied."
 else
-    echo "No DCACHE_OP_HASH lines found — nothing to remove."
+    echo "No DCACHE_OP_HASH lines found - nothing to remove."
 fi

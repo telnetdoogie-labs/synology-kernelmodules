@@ -18,6 +18,30 @@ docker build -t compile_modules .
 docker run --privileged --rm -v ./compiled_modules:/compiled_modules:rw -e PLATFORM=apollolake compile_modules
 ```
 
+### Where the platforms come from
+
+There's no platform list to maintain. Each build reads [Synology's toolchain archive](https://archive.synology.com/download/ToolChain) and uses the toolchain and kernel source from the newest DSM 7 release that includes your platform. New platforms are buildable as soon as Synology publishes their sources, and platforms Synology stops updating keep building from their last release.
+
+- **List the platforms:** run the container without `PLATFORM`, or run `python3 discover_platforms.py | jq -r 'keys[]'`.
+- **Match an older DSM:** add `-e DSM_VERSION=7.2` to build from DSM 7.2 sources instead of the newest.
+- **Pin exact sources:** mount your own file with `-v ./my_platforms.json:/synology-toolkit/platforms.json:ro`. Use the format `discover_platforms.py` prints.
+
+The kernel version each platform runs (e.g. `4.4.302+`) comes from a small table in `discover_platforms.py` covering DSM 7's three kernel series. That's the only thing to update, and only if Synology moves to a new kernel series.
+
+## Using GitHub Actions
+
+The `Build Kernel Modules` workflow (`.github/workflows/build-modules.yml`) runs the same Docker build on GitHub's runners, one parallel job per platform, so you don't need a Linux box at all.
+
+- **Run it manually:** Actions → _Build Kernel Modules_ → _Run workflow_. Enter `all` or a list of platforms such as `apollolake, geminilake`, and optionally a DSM version such as `7.2`.
+  - Tick _Open a pull request…_ to have the results committed to `compiled_modules/` in a PR.
+  - Tick _Also build 3.x-kernel platforms_ to try the experimental legacy image as well.
+- **Automatically:** it builds every platform whenever the build files change on a PR or on `main`.
+- **Releases:** pushing a tag like `v1.2.0` builds everything and attaches one zip per platform to a GitHub Release, plus `sources.json` listing the exact toolchain and kernel URLs used.
+
+Each run lists the platforms it found in the run summary, checks that all three `.ko` files were produced, and checks that their `vermagic` matches the platform's kernel version. Download the results from the run's **Artifacts** section: there is one `modules-<platform>` artifact per platform, plus a combined `compiled_modules`.
+
+For forks: the PR option requires _Settings → Actions → General → Allow GitHub Actions to create and approve pull requests_.
+
 ## Experimental - Legacy builds
 
 I've been attempting to build for older kernels, as yet unsuccessfully, but I leave a trail here lest someone can continue and make it work
@@ -79,7 +103,7 @@ x_tables               17395  24 ip6table_filter,xt_ipvs,xt_iprange,xt_mark,xt_r
 ## If you want to modify this...
 
 `entrypoint.sh` is where everything happens. If you include additional files be sure to modify the Dockerfile to copy them into the container on build.
-Currently, `entrypoint.sh` reads the `PLATFORM` value that's passed in, and uses that to set up the DSM toolchain which downloads the cross-compiler and sets the environment up for build.
+Currently, `entrypoint.sh` reads the `PLATFORM` value that's passed in, looks it up with `discover_platforms.py`, and uses that to set up the DSM toolchain which downloads the cross-compiler and sets the environment up for build.
 
 `apply_patches.sh` gets called from `entrypoint.sh` before compilation, in case any modifications are needed to config or source.
 

@@ -39,13 +39,14 @@ RUN mkdir /synology-toolkit
 RUN mkdir /synology-toolkit/toolchains
 
 WORKDIR /synology-toolkit
-COPY platforms.json .
+COPY discover_platforms.py .
 COPY entrypoint.sh .
 COPY config_modification.json .
 COPY apply_patches.sh .
 RUN chmod +x apply_patches.sh entrypoint.sh
 
 ENV PLATFORM=""
+ENV DSM_VERSION=""
 ENV IMAGE_TYPE="standard"
 
 ENTRYPOINT ["/synology-toolkit/entrypoint.sh"]

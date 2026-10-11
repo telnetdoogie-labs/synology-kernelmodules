@@ -1,0 +1,254 @@
+name: Build Kernel Modules
+
+on:
+  workflow_dispatch:
+    inputs:
+      platforms:
+        description: >
+          Platforms to build, separated by commas or spaces (e.g. "apollolake, geminilake").
+          Use "all" for every platform Synology currently publishes sources for.
+        type: string
+        default: all
+      dsm:
+        description: DSM version to build from, e.g. "7.2". Leave blank for the newest sources.
+        type: string
+        default: ""
+      include_legacy:
+        description: Also build 3.x-kernel platforms with Dockerfile_legacy (experimental, expected to fail)
+        type: boolean
+        default: false
+      open_pr:
+        description: Open a pull request that updates compiled_modules/ with the new builds
+        type: boolean
+        default: false
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+    paths:
+      - Dockerfile
+      - Dockerfile_legacy
+      - entrypoint.sh
+      - apply_patches.sh
+      - discover_platforms.py
+      - .github/scripts/**
+      - config_modification.json
+      - .github/workflows/build-modules.yml
+  pull_request:
+    paths:
+      - Dockerfile
+      - Dockerfile_legacy
+      - entrypoint.sh
+      - apply_patches.sh
+      - discover_platforms.py
+      - .github/scripts/**
+      - config_modification.json
+      - .github/workflows/build-modules.yml
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash -euo pipefail {0}
+
+concurrency:
+  group: build-modules-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  matrix:
+    name: Select platforms
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      include: ${{ steps.select.outputs.include }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Discover platforms from Synology's archive
+        env:
+          DSM_VERSION: ${{ inputs.dsm }}
+        run: |
+          python3 discover_platforms.py ${DSM_VERSION:+--dsm "$DSM_VERSION"} \
+            --summary "$RUNNER_TEMP/platforms.md" > discovered_platforms.json
+          {
+            echo "## Platforms in Synology's archive${DSM_VERSION:+ (DSM $DSM_VERSION)}"
+            echo
+            cat "$RUNNER_TEMP/platforms.md"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build matrix
+        id: select
+        env:
+          REQUESTED: ${{ inputs.platforms || 'all' }}
+          INCLUDE_LEGACY: ${{ inputs.include_legacy || false }}
+        run: bash .github/scripts/select-platforms.sh discovered_platforms.json "$REQUESTED" "$INCLUDE_LEGACY" >> "$GITHUB_OUTPUT"
+
+      # Every build job uses this exact list, so all platforms build from the same sources.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: discovered-platforms
+          path: discovered_platforms.json
+          if-no-files-found: error
+
+  build:
+    name: ${{ matrix.platform }} (${{ matrix.kver }})
+    needs: matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.matrix.outputs.include) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: discovered-platforms
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+
+      # The image is the same for every platform, so it is cached between jobs and runs.
+      - name: Build compile image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          tags: compile_modules:ci
+          load: true
+          cache-from: type=gha,scope=${{ matrix.dockerfile }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.dockerfile }}
+
+      - name: Compile modules
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          mkdir -p out
+          docker run --privileged --rm \
+            -v "$PWD/out:/compiled_modules:rw" \
+            -v "$PWD/discovered_platforms.json:/synology-toolkit/platforms.json:ro" \
+            -e PLATFORM \
+            compile_modules:ci
+          sudo chown -R "$(id -u):$(id -g)" out
+
+      # entrypoint.sh exits 0 even when make fails, so check the output here.
+      - name: Verify modules
+        run: bash .github/scripts/verify-modules.sh "out/${{ matrix.kver }}/${{ matrix.platform }}" "${{ matrix.kver }}"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: modules-${{ matrix.platform }}
+          path: out/
+          if-no-files-found: error
+
+  collect:
+    name: Collect modules
+    needs: build
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          pattern: modules-*
+          merge-multiple: true
+          path: compiled_modules
+
+      - name: Summary
+        run: |
+          {
+            echo "## Compiled modules"
+            echo
+            echo "| Kernel | Platform | Modules |"
+            echo "| --- | --- | --- |"
+            for dir in compiled_modules/*/*/; do
+              [ -d "$dir" ] || continue
+              kver=$(basename "$(dirname "$dir")")
+              platform=$(basename "$dir")
+              mods=$(find "$dir" -maxdepth 1 -name '*.ko' -printf '%f ' | sort)
+              echo "| \`$kver\` | $platform | $mods |"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: compiled_modules
+          path: compiled_modules/
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: [build, collect]
+    if: ${{ startsWith(github.ref, 'refs/tags/v') && needs.build.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: compiled_modules
+          path: compiled_modules
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: discovered-platforms
+          path: ${{ runner.temp }}
+
+      - name: Package one zip per platform
+        run: |
+          mkdir -p dist
+          for dir in compiled_modules/*/*/; do
+            kver=$(basename "$(dirname "$dir")")
+            platform=$(basename "$dir")
+            (cd "$dir" && zip -j "$GITHUB_WORKSPACE/dist/${platform}_${kver}.zip" ./*.ko)
+          done
+          (cd compiled_modules && zip -r "$GITHUB_WORKSPACE/dist/all-platforms.zip" .)
+          # Record of the exact toolchain and kernel source URLs these modules were built from.
+          cp "$RUNNER_TEMP/discovered_platforms.json" dist/sources.json
+          ls -l dist
+
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
+        with:
+          files: dist/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+
+  pull-request:
+    name: Open PR with modules
+    needs: [build, collect]
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.open_pr && needs.build.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: compiled_modules
+          path: compiled_modules
+
+      - uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1
+        with:
+          add-paths: compiled_modules/**
+          branch: ci/compiled-modules
+          delete-branch: true
+          commit-message: "chore: update compiled modules"
+          title: "chore: update compiled modules"
+          body: |
+            Modules rebuilt by the [Build Kernel Modules workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}).
+
+            Platforms requested: `${{ inputs.platforms }}`
+            DSM sources: `${{ inputs.dsm || 'newest' }}`
+
+            These have only been compiled, not tested on hardware.

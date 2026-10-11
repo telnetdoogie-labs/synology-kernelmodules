@@ -2,6 +2,7 @@ FROM centos:7
 
 ENV TERM=xterm
 ENV PLATFORM=""
+ENV DSM_VERSION=""
 ENV TAR_OPTIONS="--warning=no-timestamp"
 ENV IMAGE_TYPE="legacy"
 
@@ -58,7 +59,7 @@ ENV HOSTCFLAGS="-Wno-error"
 RUN mkdir -p /synology-toolkit/toolchains
 WORKDIR /synology-toolkit
 
-COPY platforms.json .
+COPY discover_platforms.py .
 COPY entrypoint.sh .
 COPY config_modification.json .
 COPY apply_patches.sh .
