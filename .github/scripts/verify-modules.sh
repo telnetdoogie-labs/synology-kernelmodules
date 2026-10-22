@@ -35,6 +35,16 @@ for mod in $modules; do
       failed=1
       ;;
   esac
+  # Linux 3.x's x86-64 module loader only knows these relocation types; any other
+  # makes insmod fail with "Invalid module format".
+  if [ "${kver%%.*}" = 3 ]; then
+    unsupported=$(readelf -rW "$path" | awk '/R_X86_64_/ {print $3}' |
+      grep -vxE 'R_X86_64_(NONE|64|32|32S|PC32)' | sort | uniq -c | xargs || true)
+    if [ -n "$unsupported" ]; then
+      echo "::error::$mod has relocations Linux $kver can't load: $unsupported"
+      failed=1
+    fi
+  fi
 done
 
 exit $failed

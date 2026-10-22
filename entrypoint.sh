@@ -152,9 +152,11 @@ if [ "$SYNO_VERSION" = "3" ]; then
     # Ensure kernel uses cross compiler
     export CC="${CROSS_COMPILE}gcc"
 
-    # avoid PLT relocations on gcc12
-    export KCFLAGS="-fno-plt -fno-pic -fno-pie -mcmodel=kernel -mno-red-zone -fno-stack-protector"
-    export HOSTCFLAGS="-fno-plt -fno-pie"
+    # No -fno-plt: it turns every call into a GOT relocation (R_X86_64_GOTPCRELX), which
+    # Linux 3.10 can't load. The PLT32 relocations gcc 12 emits instead are rewritten as
+    # PC32 by fix_relocs.py after the build.
+    export KCFLAGS="-fno-pic -fno-pie -mcmodel=kernel -mno-red-zone -fno-stack-protector"
+    export HOSTCFLAGS="-fno-pie"
 
     sed -i 's/CONFIG_RETPOLINE=y/CONFIG_RETPOLINE=n/' .config || true
 fi
@@ -243,6 +245,11 @@ cp net/ipv4/netfilter/iptable_raw.ko $FINAL_FOLDER/iptable_raw.ko
 cp net/ipv6/netfilter/ip6table_raw.ko $FINAL_FOLDER/ip6table_raw.ko
 if [ -d fs/overlayfs ]; then
   cp fs/overlayfs/overlay.ko $FINAL_FOLDER/overlay.ko
+fi
+
+# Linux 3.10's module loader predates R_X86_64_PLT32.
+if [ "$SYNO_VERSION" = "3" ]; then
+  python3 /synology-toolkit/fix_relocs.py $FINAL_FOLDER/*.ko || exit 1
 fi
 
 echo "Finished; Copied modules to $FINAL_FOLDER/"
