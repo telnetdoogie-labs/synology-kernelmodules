@@ -63,6 +63,7 @@ COPY discover_platforms.py .
 COPY entrypoint.sh .
 COPY config_modification.json .
 COPY apply_patches.sh .
+COPY fix_relocs.py .
 
 RUN chmod +x entrypoint.sh apply_patches.sh
 
