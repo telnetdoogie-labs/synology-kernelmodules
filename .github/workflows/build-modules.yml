@@ -372,10 +372,14 @@ jobs:
           cp -r "$new"/. compiled_modules/
           mv "$RUNNER_TEMP/sources.json" "$old"
 
+      # The commit is made by the bot and signed by GitHub. By default it would be
+      # credited to whoever started the run, unsigned.
       - name: Open pull request
         id: cpr
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1
         with:
+          sign-commits: true
+          author: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
           add-paths: compiled_modules/**
           branch: ci/compiled-modules
           delete-branch: true
