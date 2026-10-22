@@ -271,11 +271,22 @@ jobs:
             echo "found=true" >> "$GITHUB_OUTPUT"
           fi
 
+      # Assets from an earlier build (e.g. under an old naming scheme) are removed,
+      # so the release only carries what this build produced.
       - name: Attach files to the existing release
         if: ${{ steps.existing.outputs.found }}
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$GITHUB_REF_NAME" "$RUNNER_TEMP"/release/dist/* --clobber --repo "$GITHUB_REPOSITORY"
+        run: |
+          dist="$RUNNER_TEMP/release/dist"
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' |
+            while read -r name; do
+              if [ ! -e "$dist/$name" ]; then
+                echo "Removing stale asset $name"
+                gh release delete-asset "$GITHUB_REF_NAME" "$name" --repo "$GITHUB_REPOSITORY" --yes
+              fi
+            done
+          gh release upload "$GITHUB_REF_NAME" "$dist"/* --clobber --repo "$GITHUB_REPOSITORY"
 
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
         if: ${{ !steps.existing.outputs.found }}
@@ -283,6 +294,11 @@ jobs:
           files: ${{ runner.temp }}/release/dist/*
           body_path: ${{ runner.temp }}/release/notes.md
           fail_on_unmatched_files: true
+
+      - name: Check download links
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/check-release-links.sh "$GITHUB_REF_NAME"
 
   # Scheduled runs (and manual runs that ask for it): put the new modules in a PR,
   # merge it, and release everything in compiled_modules/ on main.
@@ -418,3 +434,10 @@ jobs:
           files: ${{ runner.temp }}/release/dist/*
           body_path: ${{ runner.temp }}/release/notes.md
           fail_on_unmatched_files: true
+
+      - name: Check download links
+        if: ${{ steps.prepare.outputs.tag }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.prepare.outputs.tag }}
+        run: bash .github/scripts/check-release-links.sh "$TAG"
