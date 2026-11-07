@@ -51,6 +51,8 @@ for dir in "$modules"/*/*/; do
 done
 (cd "$modules" && zip -qr "$out/dist/all-platforms.zip" .)
 cp "$modules/sources.json" "$out/dist/sources.json"
+# Checksums for the release assets themselves; check with `sha256sum -c SHA256SUMS`.
+(cd "$out/dist" && sha256sum -- *.zip sources.json > SHA256SUMS)
 
 # GitHub's changelog since the previous release (filtered by .github/release.yml).
 notes_args=(-f tag_name="$tag" -f target_commitish="$target")

@@ -372,6 +372,11 @@ jobs:
           cp -r "$new"/. compiled_modules/
           mv "$RUNNER_TEMP/sources.json" "$old"
 
+      # Rebuilt for every module, not just this run's, so it always matches the commit it's in.
+      # Downloaders (e.g. synology-docker) fetch it from main and check modules with `sha256sum -c`.
+      - name: Write module checksums
+        run: bash .github/scripts/write-checksums.sh compiled_modules
+
       # The commit is made by the bot and signed by GitHub. By default it would be
       # credited to whoever started the run, unsigned.
       - name: Open pull request

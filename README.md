@@ -39,9 +39,17 @@ The `Build Kernel Modules` workflow (`.github/workflows/build-modules.yml`) runs
 - **On code changes:** it builds every platform whenever the build files change on a PR or on `main`, as a test. Nothing is published. To ship modules built by changed build scripts, run it manually with _merge and release_, or push a tag.
 - **Tags:** pushing a tag like `v2.0.0` builds every platform from scratch and releases it under that tag.
 
-Releases attach one zip per platform (`<platform>.zip`), `all-platforms.zip`, and `sources.json` listing the exact toolchain and kernel URLs used. The release notes are written by `.github/scripts/release_notes.py`: a table of every platform with its kernel version, modules, DSM source release, what changed since the previous release, and a download link; install steps; then GitHub's changelog grouped by PR title prefix (`feat:`, `fix:`, `ci:`, `docs:`) with bots left out.
+Releases attach one zip per platform (`<platform>.zip`), `all-platforms.zip`, `sources.json` listing the exact toolchain and kernel URLs used, and `SHA256SUMS` for those files. The release notes are written by `.github/scripts/release_notes.py`: a table of every platform with its kernel version, modules, DSM source release, what changed since the previous release, and a download link; install steps; then GitHub's changelog grouped by PR title prefix (`feat:`, `fix:`, `ci:`, `docs:`) with bots left out.
 
 Each run lists the platforms it found in the run summary, checks that the expected `.ko` files were produced, and checks that their `vermagic` matches the platform's kernel version. Download the results from the run's **Artifacts** section: there is one `modules-<platform>` artifact per platform, plus a combined `compiled_modules`.
+
+`compiled_modules/SHA256SUMS` lists a SHA256 checksum for every module on `main`. It's rewritten in the same commit whenever modules change, so tools that download modules from `main` can check them before loading:
+
+```bash
+cd compiled_modules && sha256sum -c SHA256SUMS
+```
+
+The checksums come from this repo, like the modules, so they catch corrupted or partial downloads, not a compromised repo.
 
 Repository settings this needs:
 
