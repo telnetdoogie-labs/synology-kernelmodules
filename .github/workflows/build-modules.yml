@@ -260,39 +260,24 @@ jobs:
             "$GITHUB_REF_NAME" "$GITHUB_SHA" "$RUNNER_TEMP/release"
           cat "$RUNNER_TEMP/release/notes.md" >> "$GITHUB_STEP_SUMMARY"
 
-      # A release published by hand (which is what created this tag) keeps its own
-      # title and notes; the build only attaches the files to it.
-      - name: Check for a hand-written release
-        id: existing
+      # Releases are immutable: files can only be attached before a release is published.
+      # A published release for this tag can't take this build's files, so stop early.
+      - name: Check the tag has no published release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$GITHUB_REF_NAME" --silent 2>/dev/null; then
-            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "::error::$GITHUB_REF_NAME is already published, so its files can't change. Save hand-written releases as a draft, then push the tag."
+            exit 1
           fi
 
-      # Assets from an earlier build (e.g. under an old naming scheme) are removed,
-      # so the release only carries what this build produced.
-      - name: Attach files to the existing release
-        if: ${{ steps.existing.outputs.found }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          dist="$RUNNER_TEMP/release/dist"
-          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' |
-            while read -r name; do
-              if [ ! -e "$dist/$name" ]; then
-                echo "Removing stale asset $name"
-                gh release delete-asset "$GITHUB_REF_NAME" "$name" --repo "$GITHUB_REPOSITORY" --yes
-              fi
-            done
-          gh release upload "$GITHUB_REF_NAME" "$dist"/* --clobber --repo "$GITHUB_REPOSITORY"
-
+      # Creates the release, or fills in a hand-written draft for this tag (keeping its
+      # notes, with the generated notes appended), uploads the files, then publishes it.
       - uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
-        if: ${{ !steps.existing.outputs.found }}
         with:
           files: ${{ runner.temp }}/release/dist/*
           body_path: ${{ runner.temp }}/release/notes.md
+          append_body: true
           fail_on_unmatched_files: true
 
       - name: Check download links
